@@ -9,5 +9,11 @@
   "python": "3.8",
   "intl": "full-icu",
   "output": "out/Release",
-  "brotli_error_code": "ERR__ERROR_FORMAT_BLOCK_SWITCH"
+  "brotli_error_code": "ERR__ERROR_FORMAT_BLOCK_SWITCH",
+  "patch_level": "20261105",
+  "cves": [
+    "CVE-2026-111497"
+  ],
+  "linux_container": "quay.io/pypa/manylinux_2_28_x86_64",
+  "linux_python": "/opt/python/cp311-cp311/bin/python3.11"
 }

@@ -4,7 +4,7 @@
 .EXAMPLE
   .\tools\build.ps1 -Version v12.22.12 -PythonDir C:\tools\python27 -NasmDir C:\tools\nasm -WorkDir D:\NodeBuild
 .NOTES
-  A build needs 10-15 GB free in WorkDir. Output: <WorkDir>\dist\node-<Version>-patched-win-x64\
+  A build needs 10-15 GB free in WorkDir. Output: <WorkDir>\dist\node-v<base>-cm.<patch_level>-win-x64\
 #>
 param(
   [Parameter(Mandatory)][string]$Version,
@@ -31,7 +31,8 @@ if (-not (Test-Path "$src\.git")) {
 git -C $src checkout -q -f -B patched $cfg.tag
 git -C $src clean -xdfq
 $patches = Get-ChildItem "$verDir\patches\*.patch" | Sort-Object Name
-git -C $src am -q $patches.FullName
+# Fixed identity: CI runners have no git user configured, and git am needs a committer.
+git -C $src -c user.name=node-patches -c user.email=node-patches@localhost am -q $patches.FullName
 if ($LASTEXITCODE) { git -C $src am --abort; throw "Patches failed to apply to $($cfg.tag)." }
 Write-Host "Applied $($patches.Count) patch(es) to $($cfg.tag):"
 git -C $src log --oneline "$($cfg.tag)..HEAD"
@@ -39,12 +40,18 @@ if ($PatchOnly) { return }
 
 $env:PYTHON_DIR = $PythonDir
 $env:NASM_DIR = $NasmDir
+# Version suffix as semver build metadata: node -v prints v<base>+cm.<patch_level>.
+$base = $cfg.tag.TrimStart('v')
+$env:CM_BUILD = "$base+cm.$($cfg.patch_level)"
+$env:CM_PATCHES = ($cfg.cves -join ',')
+$env:NODE_CONFIGURE_EXTRA = "--tag=+cm.$($cfg.patch_level)"
 $log = Join-Path $WorkDir "build-$Version.log"
 cmd /c "`"$PSScriptRoot\build-node.cmd`" `"$src`" $($cfg.vcvars_ver) $($cfg.gyp_msvs_version) $($cfg.platform_toolset) $($cfg.intl) > `"$log`" 2>&1"
 if ($LASTEXITCODE) { Get-Content $log -Tail 30; throw "Build failed, see $log" }
 
 $out = Join-Path $src $cfg.output
-$dist = Join-Path $WorkDir "dist\node-$Version-patched-win-x64"
+# File names use "-cm." because GitHub rewrites "+" in release asset names.
+$dist = Join-Path $WorkDir "dist\node-v$base-cm.$($cfg.patch_level)-win-x64"
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item "$out\node.exe", "$out\node.pdb" $dist
 Copy-Item $patches.FullName $dist
