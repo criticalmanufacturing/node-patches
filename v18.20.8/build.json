@@ -9,7 +9,6 @@
   "python": "3.8",
   "intl": "full-icu",
   "output": "out/Release",
-  "brotli_error_code": "ERR__ERROR_FORMAT_BLOCK_SWITCH",
   "patch_level": "20261105",
   "cves": [
     "CVE-2026-111497"

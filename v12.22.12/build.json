@@ -9,7 +9,6 @@
   "python": "2.7",
   "intl": "small-icu",
   "output": "out/Release",
-  "brotli_error_code": "ERR_BLOCK_SWITCH",
   "patch_level": "20261105",
   "cves": [
     "CVE-2026-111497"
