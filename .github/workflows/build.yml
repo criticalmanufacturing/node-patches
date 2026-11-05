@@ -1,0 +1,195 @@
+name: build
+
+# Builds the patched runtimes for win-x64 and linux-x64, verifies them and,
+# on a manual run with "publish", creates one GitHub release per version with
+# build-provenance attestations.
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: Comma-separated versions (folder names) to build
+        default: v10.24.1,v12.22.12,v14.21.3,v18.20.8
+      platforms:
+        description: Comma-separated platforms (win-x64, linux-x64)
+        default: win-x64,linux-x64
+      publish:
+        description: Create GitHub releases from the results
+        type: boolean
+        default: false
+  pull_request:
+    paths: ['v*/**', 'tools/**', '.github/workflows/build.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.p.outputs.versions }}
+      win: ${{ steps.p.outputs.win }}
+      linux: ${{ steps.p.outputs.linux }}
+    steps:
+      - id: p
+        env:
+          VERSIONS: ${{ inputs.versions || 'v10.24.1,v12.22.12,v14.21.3,v18.20.8' }}
+          PLATFORMS: ${{ inputs.platforms || 'win-x64,linux-x64' }}
+        run: |
+          echo "versions=$(jq -cn --arg v "$VERSIONS" '$v | gsub("\\s";"") | split(",")')" >> "$GITHUB_OUTPUT"
+          echo "win=$([[ ",$PLATFORMS," == *",win-x64,"* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "linux=$([[ ",$PLATFORMS," == *",linux-x64,"* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.win == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read build.json
+        id: cfg
+        shell: pwsh
+        run: |
+          $c = Get-Content "${{ matrix.version }}/build.json" -Raw | ConvertFrom-Json
+          "component=$($c.vs_component)" >> $env:GITHUB_OUTPUT
+          "python=$($c.python)" >> $env:GITHUB_OUTPUT
+
+      - name: Install the MSVC toolset of this release line
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -property installationPath
+          Write-Host "Visual Studio: $vs"
+          $p = Start-Process "$installer\vs_installer.exe" -Wait -PassThru -ArgumentList `
+            'modify', '--installPath', "`"$vs`"", '--add', '${{ steps.cfg.outputs.component }}', '--quiet', '--norestart', '--nocache'
+          if ($p.ExitCode -notin 0, 3010) { throw "VS installer exited with $($p.ExitCode)" }
+          Get-ChildItem "$vs\VC\Tools\MSVC" | Select-Object -ExpandProperty Name
+
+      - name: Fetch Python and NASM
+        shell: pwsh
+        run: |
+          $t = 'C:\nbtools'; New-Item -ItemType Directory -Force $t | Out-Null
+          $pkg = if ('${{ steps.cfg.outputs.python }}' -eq '2.7') { 'python2/2.7.18' } else { 'python/3.8.10' }
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/$pkg" -OutFile "$t\py.zip"
+          Expand-Archive "$t\py.zip" "$t\py"
+          Invoke-WebRequest 'https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip' -OutFile "$t\nasm.zip"
+          Expand-Archive "$t\nasm.zip" $t
+          & "$t\py\tools\python.exe" --version
+          & "$t\nasm-2.16.03\nasm.exe" -v
+          Get-PSDrive C, D -ErrorAction SilentlyContinue | Format-Table Name, @{n='FreeGB'; e={[math]::Round($_.Free / 1GB)}}
+
+      - name: Build and verify
+        shell: pwsh
+        run: .\tools\build.ps1 -Version ${{ matrix.version }} -PythonDir C:\nbtools\py\tools -NasmDir C:\nbtools\nasm-2.16.03 -WorkDir C:\nb
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ matrix.version }}-win-x64
+          path: C:/nb/build-${{ matrix.version }}.log
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $d = Get-ChildItem C:\nb\dist -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force out | Out-Null
+          Move-Item "$($d.FullName)\node.pdb" .
+          Compress-Archive -Path $d.FullName -DestinationPath "out\$($d.Name).zip"
+          Compress-Archive -Path node.pdb -DestinationPath "out\$($d.Name)-pdb.zip"
+          Get-ChildItem out | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.version }}-win-x64
+          path: out/*
+          retention-days: 30
+
+  linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare work dir
+        run: |
+          sudo mkdir -p /mnt/nb && sudo chown "$USER" /mnt/nb
+          df -h / /mnt
+
+      - name: Build and verify
+        run: bash tools/build-linux.sh ${{ matrix.version }} /mnt/nb
+
+      - name: Package
+        run: |
+          mkdir -p out
+          cp /mnt/nb/dist/*.tar.xz out/
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.version }}-linux-x64
+          path: out/*
+          retention-days: 30
+
+  release:
+    needs: [plan, windows, linux]
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' && inputs.publish &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'artifacts/*.zip, artifacts/*.tar.xz'
+
+      - name: Create one release per version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS: ${{ needs.plan.outputs.versions }}
+        run: |
+          for v in $(jq -r '.[]' <<<"$VERSIONS"); do
+            level=$(jq -r .patch_level "$v/build.json")
+            cves=$(jq -r '.cves | join(", ")' "$v/build.json")
+            base=${v#v}
+            tag="v$base+cm.$level"
+            mkdir -p "rel/$v"
+            cp artifacts/node-v$base-cm.$level-* "rel/$v/"
+            (cd "rel/$v" && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+            cat > "rel/notes-$v.md" <<EOF
+          Node.js $base with security backports, built from upstream tag \`$v\` plus the patches in [\`$v/patches\`](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/$v/patches).
+
+          - \`node -v\` prints \`$tag\`. \`process.config.variables.cm_patches\`: \`$cves\`.
+          - Fixes: $cves. Details: [docs](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/docs).
+          - Binaries are not Authenticode-signed. Check provenance with \`gh attestation verify <file> --repo ${{ github.repository }}\`.
+          - These release lines are end-of-life: only the CVEs listed above are fixed.
+          EOF
+            gh release create "$tag" rel/$v/* --target "$GITHUB_SHA" \
+              --title "Node.js $tag" --notes-file "rel/notes-$v.md"
+          done

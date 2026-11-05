@@ -30,8 +30,14 @@ nasm -v
 
 echo [build] configure
 rem --with-ltcg and --release-urlbase match the official nodejs.org release binaries (vcbuild.bat "release")
-python configure --with-intl=%INTL% --dest-cpu=x64 --with-ltcg --release-urlbase=https://nodejs.org/download/release/
+rem NODE_CONFIGURE_EXTRA carries options with "=" or "+" (e.g. --tag=+cm.20261105), which cmd would split as arguments.
+python configure --with-intl=%INTL% --dest-cpu=x64 --with-ltcg --release-urlbase=https://nodejs.org/download/release/ %NODE_CONFIGURE_EXTRA%
 if errorlevel 1 (echo [build] configure failed & exit /b 1)
+
+if defined CM_BUILD (
+  python "%~dp0stamp.py" "%SRC%" "%CM_BUILD%" "%CM_PATCHES%"
+  if errorlevel 1 (echo [build] stamp failed & exit /b 1)
+)
 
 echo [build] msbuild
 msbuild node.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=%TOOLSET% /clp:NoItemAndPropertyList;Verbosity=minimal;Summary /nologo

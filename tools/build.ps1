@@ -39,12 +39,18 @@ if ($PatchOnly) { return }
 
 $env:PYTHON_DIR = $PythonDir
 $env:NASM_DIR = $NasmDir
+# Version suffix as semver build metadata: node -v prints v<base>+cm.<patch_level>.
+$base = $cfg.tag.TrimStart('v')
+$env:CM_BUILD = "$base+cm.$($cfg.patch_level)"
+$env:CM_PATCHES = ($cfg.cves -join ',')
+$env:NODE_CONFIGURE_EXTRA = "--tag=+cm.$($cfg.patch_level)"
 $log = Join-Path $WorkDir "build-$Version.log"
 cmd /c "`"$PSScriptRoot\build-node.cmd`" `"$src`" $($cfg.vcvars_ver) $($cfg.gyp_msvs_version) $($cfg.platform_toolset) $($cfg.intl) > `"$log`" 2>&1"
 if ($LASTEXITCODE) { Get-Content $log -Tail 30; throw "Build failed, see $log" }
 
 $out = Join-Path $src $cfg.output
-$dist = Join-Path $WorkDir "dist\node-$Version-patched-win-x64"
+# File names use "-cm." because GitHub rewrites "+" in release asset names.
+$dist = Join-Path $WorkDir "dist\node-v$base-cm.$($cfg.patch_level)-win-x64"
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item "$out\node.exe", "$out\node.pdb" $dist
 Copy-Item $patches.FullName $dist
