@@ -1,0 +1,13 @@
+{
+  "tag": "v18.20.8",
+  "commit": "4d0b4e70",
+  "brotli": "1.1.0",
+  "vcvars_ver": "14.29",
+  "platform_toolset": "v142",
+  "gyp_msvs_version": "2019",
+  "vs_component": "Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64",
+  "python": "3.8",
+  "intl": "full-icu",
+  "output": "out/Release",
+  "brotli_error_code": "ERR__ERROR_FORMAT_BLOCK_SWITCH"
+}

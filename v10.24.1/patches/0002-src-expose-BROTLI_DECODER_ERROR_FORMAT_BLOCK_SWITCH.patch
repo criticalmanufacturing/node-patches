@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joao Santos <joaosantos@criticalmanufacturing.com>
+Date: Thu, 5 Nov 2026 17:26:09 +0000
+Subject: [PATCH] src: expose BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH
+
+Backport of nodejs/node 03923858417da6a87670cf4c099993dbcc6d8361
+(Antoine du Hamel). Exposes the new error code as
+zlib.constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH and adds a
+regression test. On this release line the error surfaces as
+ERR_BLOCK_SWITCH; unpatched builds fail later with BLOCK_LENGTH_1 (-9).
+
+Refs: https://github.com/nodejs/node/commit/03923858417da6a87670cf4c099993dbcc6d8361
+CVE-ID: CVE-2026-111497
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/node_zlib.cc                         |  1 +
+ test/parallel/test-zlib-invalid-input.js | 36 ++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/src/node_zlib.cc b/src/node_zlib.cc
+index f97811d2..8122d1b7 100644
+--- a/src/node_zlib.cc
++++ b/src/node_zlib.cc
+@@ -1340,6 +1340,7 @@ void DefineZlibConstants(Local<Object> target) {
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_FORMAT_PADDING_1);
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_FORMAT_PADDING_2);
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_FORMAT_DISTANCE);
++  NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH);
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET);
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_INVALID_ARGUMENTS);
+   NODE_DEFINE_CONSTANT(target, BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES);
+diff --git a/test/parallel/test-zlib-invalid-input.js b/test/parallel/test-zlib-invalid-input.js
+index dbfb5235..7baaf321 100644
+--- a/test/parallel/test-zlib-invalid-input.js
++++ b/test/parallel/test-zlib-invalid-input.js
+@@ -50,6 +50,42 @@ nonStringInputs.forEach(common.mustCall((input) => {
+   });
+ }, nonStringInputs.length));
+ 
++{
++  // CVE-2026-111497: a block switch is invalid when the stream declares only
++  // one block type. The new error code must be exposed.
++  assert.strictEqual(zlib.constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH,
++                     -17);
++
++  // Upstream regression input. Unpatched 12.x reports the invalid block
++  // switch as "needs more input" and only fails later (ERR_BLOCK_LENGTH_1,
++  // -9); the fix must reject it at the block switch itself, in both the sync
++  // and the byte-by-byte streaming path. (Node 12 formats Brotli error codes
++  // as ERR_<NAME>, not ERR__ERROR_FORMAT_<NAME> as in newer releases.)
++  const invalidBlockSwitch = Buffer.from(
++    '200010414141fcffff07002228f00b60f7f41f000000',
++    'hex'
++  );
++  const expectedError = {
++    code: 'ERR_BLOCK_SWITCH',
++    errno: -17
++  };
++
++  assert.throws(() => zlib.brotliDecompressSync(invalidBlockSwitch),
++                expectedError);
++
++  const brotli = zlib.createBrotliDecompress();
++  brotli.resume();
++  brotli.on('error', common.mustCall((err) => {
++    assert.strictEqual(err.code, expectedError.code);
++    assert.strictEqual(err.errno, expectedError.errno);
++  }));
++  brotli.on('end', common.mustNotCall());
++  for (let i = 0; i < invalidBlockSwitch.length; i++) {
++    brotli.write(invalidBlockSwitch.subarray(i, i + 1));
++  }
++  brotli.end();
++}
++
+ unzips.forEach(common.mustCall((uz, i) => {
+   uz.on('error', common.mustCall());
+   uz.on('end', common.mustNotCall);

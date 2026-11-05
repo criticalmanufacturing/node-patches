@@ -1,0 +1,5 @@
+# Build work area and outputs; binaries are published as release assets, not committed.
+work/
+*.exe
+*.pdb
+*.zip

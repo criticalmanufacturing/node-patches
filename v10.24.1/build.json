@@ -1,0 +1,13 @@
+{
+  "tag": "v10.24.1",
+  "commit": "5182a7ec",
+  "brotli": "1.0.7",
+  "vcvars_ver": "14.16",
+  "platform_toolset": "v141",
+  "gyp_msvs_version": "2017",
+  "vs_component": "Microsoft.VisualStudio.Component.VC.v141.x86.x64",
+  "python": "2.7",
+  "intl": "small-icu",
+  "output": "Release",
+  "brotli_error_code": "ERR_BLOCK_SWITCH"
+}
