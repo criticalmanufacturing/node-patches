@@ -4,7 +4,7 @@
 .EXAMPLE
   .\tools\build.ps1 -Version v12.22.12 -PythonDir C:\tools\python27 -NasmDir C:\tools\nasm -WorkDir D:\NodeBuild
 .NOTES
-  A build needs 10-15 GB free in WorkDir. Output: <WorkDir>\dist\node-<Version>-patched-win-x64\
+  A build needs 10-15 GB free in WorkDir. Output: <WorkDir>\dist\node-v<base>-cm.<patch_level>-win-x64\
 #>
 param(
   [Parameter(Mandatory)][string]$Version,
@@ -31,7 +31,8 @@ if (-not (Test-Path "$src\.git")) {
 git -C $src checkout -q -f -B patched $cfg.tag
 git -C $src clean -xdfq
 $patches = Get-ChildItem "$verDir\patches\*.patch" | Sort-Object Name
-git -C $src am -q $patches.FullName
+# Fixed identity: CI runners have no git user configured, and git am needs a committer.
+git -C $src -c user.name=node-patches -c user.email=node-patches@localhost am -q $patches.FullName
 if ($LASTEXITCODE) { git -C $src am --abort; throw "Patches failed to apply to $($cfg.tag)." }
 Write-Host "Applied $($patches.Count) patch(es) to $($cfg.tag):"
 git -C $src log --oneline "$($cfg.tag)..HEAD"
