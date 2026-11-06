@@ -53,6 +53,10 @@ v18.20.8/
     0001-deps-brotli-backport-fix-for-CVE-2026-111497.patch
     0002-src-expose-BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH.patch
     0003-build-allow-build-metadata-tags-keep-release-URLs-on.patch
+v20.20.2/
+  build.json
+  patches/
+    (same three patches)
 ```
 
 ## Supported versions
@@ -64,6 +68,7 @@ v18.20.8/
 | v14.21.3  | edd64fe5            | 1.0.9          | v142 (14.29)  | 3.8    | full-icu   |
 | v16.20.2  | dadbde96            | 1.0.9          | v142 (14.29)  | 3.8    | full-icu   |
 | v18.20.8  | 4d0b4e70            | 1.1.0          | v142 (14.29)  | 3.8    | full-icu   |
+| v20.20.2  | 3626fea5            | 1.1.0          | v143 (14.44)  | 3.8    | full-icu   |
 
 ## Version stamp
 
@@ -144,13 +149,14 @@ The same binary built with the patches prints `ok` on every line and `=> FIXED`.
 
 | CVE              | Component             | Versions   | Doc                           |
 |------------------|-----------------------|------------|-------------------------------|
-| CVE-2026-111497  | Brotli decoder (node:zlib) | all five | docs/CVE-2026-111497.md    |
+| CVE-2026-111497  | Brotli decoder (node:zlib) | all six  | docs/CVE-2026-111497.md    |
 
 ## Prerequisites
 
 - Visual Studio 2022 or newer (tested with VS 2026 Professional), with the MSVC component named in the `vs_component` field of the version's `build.json`:
   - v10.24.1: `Microsoft.VisualStudio.Component.VC.v141.x86.x64`
   - v12.22.12, v14.21.3, v16.20.2, v18.20.8: `Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64`
+  - v20.20.2: `Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64` (the default MSVC of VS 2022 17.14; CI skips the install when it is already present)
 - The older toolsets can be installed side by side into a newer VS with the VS Installer:
   `setup.exe modify --installPath <vs> --add <component> --passive`
 - Python of the version in the `python` field of `build.json` (2.7 or 3.8). Portable copies from the nuget.org `python2` and `python` packages work.
@@ -192,7 +198,7 @@ tools/build-linux.sh v12.22.12 /mnt/nb
 Needs git, python3 and docker. The script builds inside manylinux containers, so the binary has the same glibc baseline as the official binary:
 
 - v10.24.1, v12.22.12, v14.21.3, v16.20.2: glibc 2.17, image `quay.io/pypa/manylinux2014_x86_64`.
-- v18.20.8: glibc 2.28, image `quay.io/pypa/manylinux_2_28_x86_64`.
+- v18.20.8, v20.20.2: glibc 2.28, image `quay.io/pypa/manylinux_2_28_x86_64`.
 
 The image and the Python inside it are set by the `linux_container` and `linux_python` fields of `build.json`. The work directory needs about 10 GB free. Output: `<workdir>/dist/node-v<base>-cm.<patch_level>-linux-x64.tar.xz`, with a `.sha256` file next to it. The script runs `verify.sh` on the result at the end.
 
@@ -238,7 +244,7 @@ Manual run: Actions > build > Run workflow. Inputs:
 
 - `versions`: comma-separated folder names. Default: all versions.
 - `platforms`: comma-separated `win-x64`, `linux-x64`. Default: both.
-- `publish`: when true, creates one GitHub release per version with the win zip, the pdb zip, the linux tar.xz, `SHA256SUMS.txt` and build-provenance attestations. The release tag is `v<base>+cm.<patch_level>`.
+- `publish`: when true, creates one GitHub release per version with the win zip, the pdb zip, the linux tar.xz, `SHA256SUMS.txt` and build-provenance attestations. The release tag is `v<base>+cm.<patch_level>`. Versions that already have a release are skipped. The "Latest" badge goes to the highest Node.js version in the repo.
 
 To check a downloaded file against its attestation:
 
