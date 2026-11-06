@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-  Checks that a node.exe carries the CVE-2026-111497 fix.
+  Checks that a node.exe passes the CVE regression tests in tests\cve and carries the CM build stamp.
 .DESCRIPTION
-  Feeds the upstream regression input to zlib.brotliDecompressSync and to a byte-by-byte stream.
-  A patched binary rejects it with errno -17 (BLOCK_SWITCH). An unpatched one fails later with -9.
+  Runs tests\run.js with the given binary: every CVE must be fixed. It also checks that every CVE
+  listed in the version's build.json has a test, that node -v is v<base>+cm.<patch_level>, that
+  process.config lists the CVEs, and that the release URLs point at the official base-version headers.
   If -Source points to the patched source tree, it also runs test/parallel/test-zlib-invalid-input.js.
 .EXAMPLE
   .\tools\verify.ps1 -Node C:\app\node.exe -Version v12.22.12
@@ -18,15 +19,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $cfg = Get-Content (Join-Path $root "$Version\build.json") -Raw | ConvertFrom-Json
-$out = & $Node "$PSScriptRoot\cve-2026-111497-check.js" 2>&1
-$out | ForEach-Object { "  $_" }
-$expected = "error $($cfg.brotli_error_code) -17"
-$ok = ($out -match 'BLOCK_SWITCH const = -17').Count -eq 1 -and
-      ($out -match "SYNC: $expected").Count -eq 1 -and
-      ($out -match "STREAM: $expected").Count -eq 1
+
+$ok = $true
+foreach ($c in $cfg.cves) {
+  if (-not (Test-Path (Join-Path $root "tests\cve\$c.js"))) { "  no tests\cve\$c.js"; $ok = $false }
+}
+& $Node (Join-Path $root 'tests\run.js') 2>&1 | ForEach-Object { "  $_" }
+$ok = $ok -and $LASTEXITCODE -eq 0
+
 if (-not $NoStampCheck) {
-  # Build stamp: node -v carries +cm.<patch_level>, process.config lists the CVEs,
-  # and the release URLs still point at the official base-version headers.
   $base = $cfg.tag.TrimStart('v')
   $want = "v$base+cm.$($cfg.patch_level)"
   $info = & $Node -p "[process.version, process.config.variables.cm_patches, process.release.headersUrl].join('|')"
@@ -45,5 +46,5 @@ if ($Source) {
   "  test-zlib-invalid-input.js: $(if ($testOk) { 'pass' } else { 'FAIL' })"
   $ok = $ok -and $testOk
 }
-if ($ok) { "PATCHED: $Node rejects the CVE-2026-111497 input at the block switch." }
+if ($ok) { "PATCHED: $Node" }
 else { Write-Error "NOT PATCHED (or unexpected output): $Node" }

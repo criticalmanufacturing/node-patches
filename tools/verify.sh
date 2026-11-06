@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Checks that a node binary carries the CVE-2026-111497 fix and the CM build stamp.
-# Linux counterpart of verify.ps1.
+# Checks that a node binary passes the CVE regression tests in tests/cve and
+# carries the CM build stamp. Linux counterpart of verify.ps1.
 # Usage: tools/verify.sh <node> <version> [patched source tree]
 set -uo pipefail
 NODE=$1; VERSION=$2; SRC=${3:-}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CFG=$ROOT/$VERSION/build.json
 cfg() { python3 -c "import json,sys; v=json.load(open(sys.argv[1]))[sys.argv[2]]; print(','.join(v) if isinstance(v,list) else v)" "$CFG" "$1"; }
-CODE=$(cfg brotli_error_code); TAG=$(cfg tag); LEVEL=$(cfg patch_level); CVES=$(cfg cves)
+TAG=$(cfg tag); LEVEL=$(cfg patch_level); CVES=$(cfg cves)
 BASE=${TAG#v}
 ok=1
 
-out=$("$NODE" "$ROOT/tools/cve-2026-111497-check.js" 2>&1); echo "$out" | sed 's/^/  /'
-grep -q 'BLOCK_SWITCH const = -17' <<<"$out" || ok=0
-grep -q "SYNC: error $CODE -17" <<<"$out" || ok=0
-grep -q "STREAM: error $CODE -17" <<<"$out" || ok=0
+# Every CVE this version claims to fix needs a regression test.
+for c in ${CVES//,/ }; do [ -f "$ROOT/tests/cve/$c.js" ] || { echo "  no tests/cve/$c.js"; ok=0; }; done
+"$NODE" "$ROOT/tests/run.js" | sed 's/^/  /'; [ "${PIPESTATUS[0]}" = 0 ] || ok=0
 
 ver=$("$NODE" -v)
 patches=$("$NODE" -p 'process.config.variables.cm_patches')

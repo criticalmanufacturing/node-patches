@@ -8,7 +8,7 @@ on:
     inputs:
       versions:
         description: Comma-separated versions (folder names) to build
-        default: v10.24.1,v12.22.12,v14.21.3,v18.20.8
+        default: v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8
       platforms:
         description: Comma-separated platforms (win-x64, linux-x64)
         default: win-x64,linux-x64
@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
   pull_request:
-    paths: ['v*/**', 'tools/**', '.github/workflows/build.yml']
+    paths: ['v*/**', 'tools/**', 'tests/**', '.github/workflows/build.yml']
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
     steps:
       - id: p
         env:
-          VERSIONS: ${{ inputs.versions || 'v10.24.1,v12.22.12,v14.21.3,v18.20.8' }}
+          VERSIONS: ${{ inputs.versions || 'v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8' }}
           PLATFORMS: ${{ inputs.platforms || 'win-x64,linux-x64' }}
         run: |
           echo "versions=$(jq -cn --arg v "$VERSIONS" '$v | gsub("\\s";"") | split(",")')" >> "$GITHUB_OUTPUT"
@@ -134,6 +134,18 @@ jobs:
       - name: Build and verify
         run: bash tools/build-linux.sh ${{ matrix.version }} /mnt/nb
 
+      # Negative control: the same tests must fail on the official binary, which
+      # shows they detect each vulnerability rather than passing on any build.
+      - name: Show the official binary is vulnerable
+        run: |
+          tag=$(jq -r .tag ${{ matrix.version }}/build.json)
+          f=node-$tag-linux-x64.tar.xz
+          cd /mnt/nb
+          curl -fsSLO "https://nodejs.org/dist/$tag/$f"
+          curl -fsSL "https://nodejs.org/dist/$tag/SHASUMS256.txt" | grep " $f\$" | sha256sum -c -
+          tar -xJf "$f"
+          "/mnt/nb/node-$tag-linux-x64/bin/node" "$GITHUB_WORKSPACE/tests/run.js" --expect vulnerable
+
       - name: Package
         run: |
           mkdir -p out
@@ -179,6 +191,8 @@ jobs:
             cves=$(jq -r '.cves | join(", ")' "$v/build.json")
             base=${v#v}
             tag="v$base+cm.$level"
+            # A release is immutable once published: bump patch_level to ship a new build.
+            if gh release view "$tag" >/dev/null 2>&1; then echo "$tag already released, skipping"; continue; fi
             mkdir -p "rel/$v"
             cp artifacts/node-v$base-cm.$level-* "rel/$v/"
             (cd "rel/$v" && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
@@ -187,6 +201,7 @@ jobs:
 
           - \`node -v\` prints \`$tag\`. \`process.config.variables.cm_patches\`: \`$cves\`.
           - Fixes: $cves. Details: [docs](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/docs).
+          - To check a binary, run \`node tests/run.js\` from a checkout of this repo with that binary. Every CVE must show FIXED.
           - Binaries are not Authenticode-signed. Check provenance with \`gh attestation verify <file> --repo ${{ github.repository }}\`.
           - These release lines are end-of-life: only the CVEs listed above are fixed.
           EOF

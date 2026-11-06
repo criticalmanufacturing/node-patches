@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joao Santos <joaosantos@criticalmanufacturing.com>
+Date: Thu, 5 Nov 2026 17:46:15 +0000
+Subject: [PATCH] build: allow +build-metadata tags, keep release URLs on base
+ version
+
+Let `configure --tag` take semver build metadata (a tag starting with "+",
+e.g. "+cm.20261105") in addition to pre-release tags. Previously "-" was
+always prepended, which makes the version a semver pre-release that fails
+range checks such as npm "engines" (">=12" does not match
+"12.22.12-20261105").
+
+Build the nodejs.org release URLs (process.release.sourceUrl, headersUrl,
+libUrl) from the version without the tag, so node-gyp keeps downloading the
+official headers and node.lib of the base release for a tagged build.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configure.py         | 4 +++-
+ src/node_metadata.cc | 4 ++--
+ src/node_version.h   | 7 +++++++
+ 3 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/configure.py b/configure.py
+index ce41bff4..ab389bb1 100755
+--- a/configure.py
++++ b/configure.py
+@@ -1376,7 +1376,9 @@ def configure_node(o):
+     raise Exception('Link Time Code Generation is only supported on Windows.')
+ 
+   if options.tag:
+-    o['variables']['node_tag'] = '-' + options.tag
++    # Accept semver build metadata ("+...") as well as pre-release tags ("-...").
++    o['variables']['node_tag'] = (options.tag if options.tag[0] in '+-'
++                                  else '-' + options.tag)
+   else:
+     o['variables']['node_tag'] = ''
+ 
+diff --git a/src/node_metadata.cc b/src/node_metadata.cc
+index 260b5196..f9330d1a 100644
+--- a/src/node_metadata.cc
++++ b/src/node_metadata.cc
+@@ -108,8 +108,8 @@ Metadata::Release::Release() : name(NODE_RELEASE) {
+ #endif  // NODE_VERSION_IS_LTS
+ 
+ #ifdef NODE_HAS_RELEASE_URLS
+-#define NODE_RELEASE_URLPFX NODE_RELEASE_URLBASE "v" NODE_VERSION_STRING "/"
+-#define NODE_RELEASE_URLFPFX NODE_RELEASE_URLPFX "node-v" NODE_VERSION_STRING
++#define NODE_RELEASE_URLPFX NODE_RELEASE_URLBASE "v" NODE_RELEASE_VERSION_STRING "/"
++#define NODE_RELEASE_URLFPFX NODE_RELEASE_URLPFX "node-v" NODE_RELEASE_VERSION_STRING
+ 
+   source_url = NODE_RELEASE_URLFPFX ".tar.gz";
+   headers_url = NODE_RELEASE_URLFPFX "-headers.tar.gz";
+diff --git a/src/node_version.h b/src/node_version.h
+index 45ebb27a..cab73d89 100644
+--- a/src/node_version.h
++++ b/src/node_version.h
+@@ -64,6 +64,13 @@
+ 
+ #define NODE_VERSION "v" NODE_VERSION_STRING
+ 
++// Version without NODE_TAG. Used for the nodejs.org release URLs, so a build
++// tagged with semver build metadata (e.g. "+cm.20261105") still points
++// node-gyp at the official headers and node.lib of the base release.
++#define NODE_RELEASE_VERSION_STRING NODE_STRINGIFY(NODE_MAJOR_VERSION) "." \
++                                    NODE_STRINGIFY(NODE_MINOR_VERSION) "." \
++                                    NODE_STRINGIFY(NODE_PATCH_VERSION)
++
+ 
+ #define NODE_VERSION_AT_LEAST(major, minor, patch) \
+   (( (major) < NODE_MAJOR_VERSION) \
