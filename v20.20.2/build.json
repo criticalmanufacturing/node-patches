@@ -1,0 +1,18 @@
+{
+  "tag": "v20.20.2",
+  "commit": "3626fea5",
+  "brotli": "1.1.0",
+  "vcvars_ver": "14.44",
+  "platform_toolset": "v143",
+  "gyp_msvs_version": "2022",
+  "vs_component": "Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64",
+  "python": "3.8",
+  "intl": "full-icu",
+  "output": "out/Release",
+  "patch_level": "20261106",
+  "cves": [
+    "CVE-2026-111497"
+  ],
+  "linux_container": "quay.io/pypa/manylinux_2_28_x86_64",
+  "linux_python": "/opt/python/cp311-cp311/bin/python3.11"
+}

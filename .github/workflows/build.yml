@@ -8,7 +8,7 @@ on:
     inputs:
       versions:
         description: Comma-separated versions (folder names) to build
-        default: v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8
+        default: v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8,v20.20.2
       platforms:
         description: Comma-separated platforms (win-x64, linux-x64)
         default: win-x64,linux-x64
@@ -36,7 +36,7 @@ jobs:
     steps:
       - id: p
         env:
-          VERSIONS: ${{ inputs.versions || 'v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8' }}
+          VERSIONS: ${{ inputs.versions || 'v10.24.1,v12.22.12,v14.21.3,v16.20.2,v18.20.8,v20.20.2' }}
           PLATFORMS: ${{ inputs.platforms || 'win-x64,linux-x64' }}
         run: |
           echo "versions=$(jq -cn --arg v "$VERSIONS" '$v | gsub("\\s";"") | split(",")')" >> "$GITHUB_OUTPUT"
@@ -61,6 +61,7 @@ jobs:
         run: |
           $c = Get-Content "${{ matrix.version }}/build.json" -Raw | ConvertFrom-Json
           "component=$($c.vs_component)" >> $env:GITHUB_OUTPUT
+          "vcvars=$($c.vcvars_ver)" >> $env:GITHUB_OUTPUT
           "python=$($c.python)" >> $env:GITHUB_OUTPUT
 
       - name: Install the MSVC toolset of this release line
@@ -69,6 +70,9 @@ jobs:
           $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
           $vs = & "$installer\vswhere.exe" -latest -property installationPath
           Write-Host "Visual Studio: $vs"
+          # vcvarsall -vcvars_ver=<v> picks the newest MSVC folder whose name contains <v>.
+          $have = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Where-Object Name -like '*${{ steps.cfg.outputs.vcvars }}*'
+          if ($have) { Write-Host "MSVC ${{ steps.cfg.outputs.vcvars }} already installed: $($have.Name -join ', ')"; exit 0 }
           $p = Start-Process "$installer\vs_installer.exe" -Wait -PassThru -ArgumentList `
             'modify', '--installPath', "`"$vs`"", '--add', '${{ steps.cfg.outputs.component }}', '--quiet', '--norestart', '--nocache'
           if ($p.ExitCode -notin 0, 3010) { throw "VS installer exited with $($p.ExitCode)" }
@@ -186,6 +190,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSIONS: ${{ needs.plan.outputs.versions }}
         run: |
+          # The "Latest" badge goes to the highest Node.js version in the repo, not the newest release.
+          highest=$(ls -d v*/ | tr -d / | sort -V | tail -1)
           for v in $(jq -r '.[]' <<<"$VERSIONS"); do
             level=$(jq -r .patch_level "$v/build.json")
             cves=$(jq -r '.cves | join(", ")' "$v/build.json")
@@ -206,5 +212,6 @@ jobs:
           - These release lines are end-of-life: only the CVEs listed above are fixed.
           EOF
             gh release create "$tag" rel/$v/* --target "$GITHUB_SHA" \
-              --title "Node.js $tag" --notes-file "rel/notes-$v.md"
+              --title "Node.js $tag" --notes-file "rel/notes-$v.md" \
+              --latest=$([ "$v" = "$highest" ] && echo true || echo false)
           done

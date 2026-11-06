@@ -14,6 +14,9 @@ import sys
 src, cm_build, cm_patches = sys.argv[1:4]
 
 gypi = os.path.join(src, 'config.gypi')
+# Keep config.gypi's timestamp: if it became newer than out/Makefile, make would
+# re-run gyp without configure's -Dpython=..., which fails on Node.js 20.
+st = os.stat(gypi)
 with io.open(gypi, 'r', encoding='utf-8') as f:
     lines = f.read().splitlines()
 header = [l for l in lines if l.startswith('#')]
@@ -23,6 +26,7 @@ config['variables']['cm_patches'] = cm_patches
 text = '\n'.join(header) + '\n' + pprint.pformat(config, indent=2) + '\n'
 with io.open(gypi, 'w', encoding='utf-8', newline='\n') as f:
     f.write(text if isinstance(text, type(u'')) else text.decode('utf-8'))
+os.utime(gypi, (st.st_atime, st.st_mtime))
 
 rc = os.path.join(src, 'src', 'res', 'node.rc')
 if os.path.exists(rc):
