@@ -205,7 +205,7 @@ The image and the Python inside it are set by the `linux_container` and `linux_p
 ## Verifying a binary
 
 ```powershell
-.\tools\verify.ps1 -Node <path>\node.exe -Version <version> [-Source <patched source tree>] [-NoStampCheck]
+.\tools\verify.ps1 -Node <path>\node.exe -Version <version> [-Source <patched source tree>] [-NoStampCheck] [-Signer '<signer name>']
 ```
 
 ```sh
@@ -215,6 +215,8 @@ tools/verify.sh <path>/node <version> [<patched source tree>]
 Both scripts run `tests/run.js` with the given binary, and every CVE must show `FIXED`. If a source tree is given, the scripts also run `test/parallel/test-zlib-invalid-input.js` from that tree.
 
 Both scripts also check the version stamp. `node -v` must be `v<base>+cm.<patch_level>`, `cm_patches` must list every CVE in `build.json`, and `headersUrl` must point at the base-version headers. For binaries built before the stamp existed, pass `-NoStampCheck` to `verify.ps1`.
+
+With `-Signer`, `verify.ps1` also requires a valid Authenticode signature with a timestamp, whose signer certificate subject contains the given text.
 
 ## Adding a patch
 
@@ -245,6 +247,7 @@ Manual run: Actions > build > Run workflow. Inputs:
 - `versions`: comma-separated folder names. Default: all versions.
 - `platforms`: comma-separated `win-x64`, `linux-x64`. Default: both.
 - `publish`: when true, creates one GitHub release per version with the win zip, the pdb zip, the linux tar.xz, `SHA256SUMS.txt` and build-provenance attestations. The release tag is `v<base>+cm.<patch_level>`. Versions that already have a release are skipped. The "Latest" badge goes to the highest Node.js version in the repo.
+- `sign`: when true (default) and `publish` is true, the Windows `node.exe` is Authenticode-signed before the release is made. See [Code signing](#code-signing).
 
 To check a downloaded file against its attestation:
 
@@ -256,8 +259,68 @@ gh attestation verify <file> --repo criticalmanufacturing/node-patches
 
 - Never commit `node.exe` or `node.pdb`. They are excluded by `.gitignore`.
 - Publish binaries as GitHub Release assets, together with `SHA256SUMS.txt`. The CI `publish` run does this.
-- Windows binaries are not Authenticode-signed. Sign them with the company certificate before shipping. If signing is added to CI, it must run before the attestations and checksums are created, or they will not match the shipped files.
+- Windows `node.exe` is Authenticode-signed by the CI `publish` run (see below). `node.pdb` and the zips are not signed.
 - Linux binaries: no signing applies. Use the attestations and checksums.
+
+## Code signing
+
+Publish runs sign `node.exe` with the company's DigiCert certificate. The private key stays in DigiCert KeyLocker (Software Trust Manager), and never leaves it.
+
+How it works:
+
+1. The `windows` jobs build and test an unsigned `node.exe`, as on every run.
+2. On a publish run, the `sign` job downloads each Windows zip and signs `node.exe` with DigiCert's action `digicert/code-signing-software-trust-action` (pinned to v1.2.1, simple signing mode: SHA-256, timestamped).
+3. It runs `verify.ps1 -Signer <SIGNER_NAME>`, which requires a valid, timestamped signature, the CVE tests and the stamp checks. Then it refreshes `SHA256SUMS.txt` and replaces the zip.
+4. The `release` job attests and publishes the signed zip, so the checksums and attestations match the shipped files.
+
+The `sign` job runs in the GitHub environment `signing`. Only that job can read the signing secrets. Pull requests and the build jobs never see them.
+
+### One-time setup
+
+In DigiCert ONE (KeyLocker), done by the certificate administrator:
+
+1. Find the keypair of the code-signing certificate and note its **keypair alias**.
+2. Create a service user with signing access to that keypair, and an **API key** for it.
+3. Create a **client authentication certificate** for the service user. You get a `.p12` file and its password.
+
+In GitHub, go to Settings > Environments > New environment, named `signing`:
+
+1. Under Deployment branches and tags, select "Selected branches" and add `main`.
+2. Under Required reviewers, add the people who approve each signing run.
+3. Add these environment secrets:
+
+   | Secret | Value |
+   |---|---|
+   | `SM_API_KEY` | the API key |
+   | `SM_CLIENT_CERT_FILE_B64` | the `.p12` file, base64-encoded |
+   | `SM_CLIENT_CERT_PASSWORD` | the `.p12` password |
+
+4. Add these environment variables:
+
+   | Variable | Value |
+   |---|---|
+   | `SM_HOST` | the DigiCert ONE host, for example `https://clientauth.one.digicert.com` |
+   | `SM_KEYPAIR_ALIAS` | the keypair alias |
+
+5. In Settings > Secrets and variables > Actions > Variables, add the repository variable `SIGNER_NAME`. Set it to text from the certificate subject, for example `Critical Manufacturing`. It is not secret: the release notes and the signature check use it.
+
+To base64-encode the `.p12` on Windows (the result goes to the clipboard):
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\path\client-auth.p12')) | Set-Clipboard
+```
+
+### Signing a release
+
+Actions > build > Run workflow on `main`, with `publish` ticked and `sign` ticked. When the `sign` job starts, GitHub asks a reviewer to approve it. Untick `sign` to publish unsigned, for example if the setup is not done yet.
+
+Existing releases are never changed. To ship signed builds of versions that are already released, bump `patch_level` in their `build.json` so the run creates new releases.
+
+### Checking a signed binary
+
+- Explorer: right-click `node.exe` > Properties > Digital Signatures.
+- PowerShell: `Get-AuthenticodeSignature node.exe | Format-List Status, SignerCertificate, TimeStamperCertificate`.
+- With the repo: `.\tools\verify.ps1 -Node node.exe -Version <version> -Signer 'Critical Manufacturing'`.
 
 ## Caveat
 
