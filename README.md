@@ -273,7 +273,9 @@ How it works:
 3. It runs `verify.ps1 -Signer <SIGNER_NAME>`, which requires a valid, timestamped signature, the CVE tests and the stamp checks. Then it refreshes `SHA256SUMS.txt` and replaces the zip.
 4. The `release` job attests and publishes the signed zip, so the checksums and attestations match the shipped files.
 
-The `sign` job runs in the GitHub environment `signing`. Only that job can read the signing secrets. Pull requests and the build jobs never see them.
+The `sign` job runs in the GitHub environment `signing`. With the secrets stored in that environment (the setup below), only that job can read them, only from `main`, and only after a reviewer approves the run. Pull requests and the build jobs never see them.
+
+Today the secrets and variables are repository-level, because creating the environment needs admin rights. GitHub creates the `signing` environment on its first run without protection rules. The workflow still works, but any workflow on any branch of this repository can read the secrets, and signing runs without an approval step. Pull requests from forks never get secrets. A repository admin can move the values into the environment later without changing the workflow: environment secrets override repository secrets of the same name.
 
 ### One-time setup
 
