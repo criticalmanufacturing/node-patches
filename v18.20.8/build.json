@@ -9,7 +9,7 @@
   "python": "3.8",
   "intl": "full-icu",
   "output": "out/Release",
-  "patch_level": "20261105",
+  "patch_level": "20261116",
   "cves": [
     "CVE-2026-111497"
   ],

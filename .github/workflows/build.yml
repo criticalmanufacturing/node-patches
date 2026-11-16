@@ -16,6 +16,10 @@ on:
         description: Create GitHub releases from the results
         type: boolean
         default: false
+      sign:
+        description: Authenticode-sign node.exe with the DigiCert KeyLocker key (publish runs only; needs the "signing" environment)
+        type: boolean
+        default: true
   pull_request:
     paths: ['v*/**', 'tools/**', 'tests/**', '.github/workflows/build.yml']
 
@@ -162,8 +166,100 @@ jobs:
           path: out/*
           retention-days: 30
 
+  # Authenticode-signs node.exe with the company's DigiCert KeyLocker key. Runs only
+  # on manual publish runs, in the protected "signing" environment (main branch only,
+  # required reviewers), so pull requests and the build jobs never see the secrets.
+  sign:
+    needs: [plan, windows]
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish && inputs.sign &&
+      needs.plan.outputs.win == 'true'
+    runs-on: windows-2022
+    environment: signing
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.version }}-win-x64
+          path: in
+
+      - name: Unpack
+        id: unpack
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem in -Filter *-win-x64.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName work
+          $dir = (Get-ChildItem work -Directory | Select-Object -First 1).FullName
+          if ((Get-AuthenticodeSignature "$dir\node.exe").Status -ne 'NotSigned') { throw "$dir\node.exe is already signed" }
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+          "zip=$($zip.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Write the DigiCert client certificate
+        shell: pwsh
+        env:
+          P12_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          CHECK_SM_HOST: ${{ vars.SM_HOST }}
+          CHECK_SM_KEYPAIR_ALIAS: ${{ vars.SM_KEYPAIR_ALIAS }}
+          CHECK_SIGNER_NAME: ${{ vars.SIGNER_NAME }}
+        run: |
+          # Without these the action would install its tools but not sign, and the check would be skipped.
+          foreach ($n in 'P12_B64', 'CHECK_SM_HOST', 'CHECK_SM_KEYPAIR_ALIAS', 'CHECK_SIGNER_NAME') {
+            if (-not [Environment]::GetEnvironmentVariable($n)) { throw "$($n -replace '^CHECK_', '' -replace '^P12_B64$', 'SM_CLIENT_CERT_FILE_B64') is not set; see README > Code signing." }
+          }
+          $f = Join-Path $env:RUNNER_TEMP 'sm_client.p12'
+          [IO.File]::WriteAllBytes($f, [Convert]::FromBase64String($env:P12_B64))
+          "SM_CLIENT_CERT_FILE=$f" >> $env:GITHUB_ENV
+
+      # Simple signing mode: smctl signs with the KeyLocker keypair, SHA-256, timestamped.
+      - name: Sign node.exe
+        uses: digicert/code-signing-software-trust-action@fae23a455ba4bde62b64fd7cb2f81ade788f5a95 # v1.2.1
+        with:
+          simple-signing-mode: true
+          input: ${{ steps.unpack.outputs.dir }}\node.exe
+          keypair-alias: ${{ vars.SM_KEYPAIR_ALIAS }}
+        env:
+          SM_HOST: ${{ vars.SM_HOST }}
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+
+      - name: Remove the client certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item (Join-Path $env:RUNNER_TEMP 'sm_client.p12') -ErrorAction SilentlyContinue
+
+      - name: Check the signature, re-run the checks, repackage
+        shell: pwsh
+        env:
+          SIGNER: ${{ vars.SIGNER_NAME }}
+        run: |
+          $dir = '${{ steps.unpack.outputs.dir }}'
+          .\tools\verify.ps1 -Node "$dir\node.exe" -Version ${{ matrix.version }} -Signer $env:SIGNER
+          # Signing changed node.exe: refresh its line in SHA256SUMS.txt (node.pdb is unchanged).
+          $h = (Get-FileHash "$dir\node.exe").Hash.ToLower()
+          $sums = "$dir\SHA256SUMS.txt"
+          (Get-Content $sums) -replace '^[0-9a-f]{64}  node\.exe$', "$h  node.exe" | Set-Content -Encoding ascii $sums
+          if (-not (Select-String -Path $sums -SimpleMatch "$h  node.exe")) { throw 'SHA256SUMS.txt was not updated' }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive -Path $dir -DestinationPath "out\${{ steps.unpack.outputs.zip }}"
+          Copy-Item in\*-pdb.zip out\
+          Get-ChildItem out | Format-Table Name, Length
+
+      # Replaces the unsigned artifact of the windows job, so the release picks up the signed zip.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.version }}-win-x64
+          path: out/*
+          retention-days: 30
+          overwrite: true
+
   release:
-    needs: [plan, windows, linux]
+    needs: [plan, windows, linux, sign]
     if: >-
       always() && github.event_name == 'workflow_dispatch' && inputs.publish &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -189,7 +285,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSIONS: ${{ needs.plan.outputs.versions }}
+          SIGNED: ${{ needs.sign.result == 'success' }}
+          SIGNER: ${{ vars.SIGNER_NAME }}
         run: |
+          if [ "$SIGNED" = true ]; then
+            sigline="- Windows \`node.exe\` is Authenticode-signed by $SIGNER (DigiCert) and timestamped. Provenance: \`gh attestation verify <file> --repo ${{ github.repository }}\`."
+          else
+            sigline="- Binaries are not Authenticode-signed. Check provenance with \`gh attestation verify <file> --repo ${{ github.repository }}\`."
+          fi
           # The "Latest" badge goes to the highest Node.js version in the repo, not the newest release.
           highest=$(ls -d v*/ | tr -d / | sort -V | tail -1)
           for v in $(jq -r '.[]' <<<"$VERSIONS"); do
@@ -208,7 +311,7 @@ jobs:
           - \`node -v\` prints \`$tag\`. \`process.config.variables.cm_patches\`: \`$cves\`.
           - Fixes: $cves. Details: [docs](https://github.com/${{ github.repository }}/tree/${{ github.sha }}/docs).
           - To check a binary, run \`node tests/run.js\` from a checkout of this repo with that binary. Every CVE must show FIXED.
-          - Binaries are not Authenticode-signed. Check provenance with \`gh attestation verify <file> --repo ${{ github.repository }}\`.
+          $sigline
           - These release lines are end-of-life: only the CVEs listed above are fixed.
           EOF
             gh release create "$tag" rel/$v/* --target "$GITHUB_SHA" \
