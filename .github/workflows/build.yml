@@ -240,11 +240,14 @@ jobs:
         run: |
           $dir = '${{ steps.unpack.outputs.dir }}'
           .\tools\verify.ps1 -Node "$dir\node.exe" -Version ${{ matrix.version }} -Signer $env:SIGNER
-          # Signing changed node.exe: refresh its line in SHA256SUMS.txt (node.pdb is unchanged).
-          $h = (Get-FileHash "$dir\node.exe").Hash.ToLower()
+          # Signing changed node.exe. The release job computes SHA256SUMS.txt over the final assets;
+          # a local build's zip may also carry one, so refresh its node.exe line if it is there.
           $sums = "$dir\SHA256SUMS.txt"
-          (Get-Content $sums) -replace '^[0-9a-f]{64}  node\.exe$', "$h  node.exe" | Set-Content -Encoding ascii $sums
-          if (-not (Select-String -Path $sums -SimpleMatch "$h  node.exe")) { throw 'SHA256SUMS.txt was not updated' }
+          if (Test-Path $sums) {
+            $h = (Get-FileHash "$dir\node.exe").Hash.ToLower()
+            (Get-Content $sums) -replace '^[0-9a-f]{64}  node\.exe$', "$h  node.exe" | Set-Content -Encoding ascii $sums
+            if (-not (Select-String -Path $sums -SimpleMatch "$h  node.exe")) { throw 'SHA256SUMS.txt was not updated' }
+          }
           New-Item -ItemType Directory -Force out | Out-Null
           Compress-Archive -Path $dir -DestinationPath "out\${{ steps.unpack.outputs.zip }}"
           Copy-Item in\*-pdb.zip out\
