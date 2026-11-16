@@ -270,7 +270,7 @@ How it works:
 
 1. The `windows` jobs build and test an unsigned `node.exe`, as on every run.
 2. On a publish run, the `sign` job downloads each Windows zip and signs `node.exe` with DigiCert's action `digicert/code-signing-software-trust-action` (pinned to v1.2.1, simple signing mode: SHA-256, timestamped).
-3. It runs `verify.ps1 -Signer <SIGNER_NAME>`, which requires a valid, timestamped signature, the CVE tests and the stamp checks. Then it refreshes `SHA256SUMS.txt` and replaces the zip.
+3. It runs `verify.ps1 -Signer <SIGNER_NAME>`, which requires a valid, timestamped signature, the CVE tests and the stamp checks. Then it replaces the zip with one containing the signed `node.exe`.
 4. The `release` job attests and publishes the signed zip, so the checksums and attestations match the shipped files.
 
 The `sign` job runs in the GitHub environment `signing`. With the secrets stored in that environment (the setup below), only that job can read them, only from `main`, and only after a reviewer approves the run. Pull requests and the build jobs never see them.
